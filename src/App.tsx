@@ -4,6 +4,7 @@ import { useStore } from './store'
 import { activateFirstImportedProfile, buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
 import { isDefaultConfigOnlyEnabled, mergeImportedSettings } from './lib/apiProfiles'
 import { getCustomProviderConfigUrl, loadCustomProviderSettingsFromUrl } from './lib/customProviderConfigUrl'
+import { loadSkillsFromManifest } from './lib/skillManifest'
 import { useDockerApiUrlMigrationNotice } from './hooks/useDockerApiUrlMigrationNotice'
 import type { AppSettings } from './types'
 import Header from './components/Header'
@@ -23,6 +24,20 @@ import { FavoriteCollectionPickerModal, FavoriteCollectionsView, ManageCollectio
 import { useGlobalClickSuppression } from './lib/clickSuppression'
 
 let customProviderConfigUrlImportStarted = false
+let staticSkillsImportStarted = false
+
+function importStaticSkills() {
+  if (staticSkillsImportStarted) return
+  staticSkillsImportStarted = true
+  void loadSkillsFromManifest()
+    .then((skills) => {
+      const state = useStore.getState()
+      skills.forEach((skill) => state.importSkill(skill))
+    })
+    .catch((error) => {
+      console.warn('Failed to import static skills:', error)
+    })
+}
 
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
@@ -70,7 +85,7 @@ export default function App() {
           clearAppliedUrlSettings()
         })
 
-      initStore()
+      void initStore().then(importStaticSkills)
       return
     }
 
@@ -93,7 +108,7 @@ export default function App() {
         })
     }
 
-    initStore()
+    void initStore().then(importStaticSkills)
   }, [setSettings])
 
   useEffect(() => {

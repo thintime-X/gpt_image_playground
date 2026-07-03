@@ -19,6 +19,7 @@ import { shouldUseApiProxy } from './devProxy'
 import { normalizeStreamPartialImages, parseDefaultApiUrl } from './defaultApiUrl'
 import { readRuntimeEnv } from './runtimeEnv'
 import { isImportableConfigUrl } from './customProviderConfigUrl'
+import { mergeImportedSkills, normalizeSkills } from './skills'
 
 const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 const RAW_DEFAULT_API_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL)
@@ -566,6 +567,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentImageProfileId,
     profiles,
     activeProfileId,
+    skills: normalizeSkills(record.skills),
   }
 }
 
@@ -703,6 +705,7 @@ function isDefaultOpenAIProfile(profile: ApiProfile): boolean {
 
 function hasOnlyDefaultProfiles(settings: AppSettings): boolean {
   return settings.customProviders.length === 0 &&
+    settings.skills.length === 0 &&
     settings.profiles.length === 1 &&
     settings.activeProfileId === DEFAULT_OPENAI_PROFILE_ID &&
     isDefaultOpenAIProfile(settings.profiles[0])
@@ -812,6 +815,27 @@ export function findEquivalentApiProfile(
 
 export function mergeImportedSettings(currentSettings: Partial<AppSettings> | unknown, importedSettings: Partial<AppSettings> | unknown): AppSettings {
   const current = normalizeSettings(currentSettings)
+  const importedRecord = importedSettings && typeof importedSettings === 'object' ? importedSettings as Record<string, unknown> : {}
+  const hasImportedProfiles = Array.isArray(importedRecord.profiles) && importedRecord.profiles.length > 0
+  const hasImportedCustomProviders = Array.isArray(importedRecord.customProviders) && importedRecord.customProviders.length > 0
+  const hasLegacyImportedProfile =
+    importedRecord.baseUrl !== undefined ||
+    importedRecord.apiKey !== undefined ||
+    importedRecord.model !== undefined ||
+    importedRecord.timeout !== undefined ||
+    importedRecord.apiMode !== undefined ||
+    importedRecord.codexCli !== undefined ||
+    importedRecord.apiProxy !== undefined ||
+    importedRecord.streamImages !== undefined ||
+    importedRecord.streamPartialImages !== undefined
+  const importedSkills = normalizeSkills(importedRecord.skills)
+  if (!hasImportedProfiles && !hasImportedCustomProviders && !hasLegacyImportedProfile && importedSkills.length > 0) {
+    return normalizeSettings({
+      ...current,
+      skills: mergeImportedSkills(current.skills, importedSkills),
+    })
+  }
+
   const normalizedImported = normalizeSettings(importedSettings)
   const imported = normalizeSettings({
     ...normalizedImported,
@@ -841,6 +865,7 @@ export function mergeImportedSettings(currentSettings: Partial<AppSettings> | un
     ...current,
     customProviders,
     profiles,
+    skills: mergeImportedSkills(current.skills, imported.skills),
     activeProfileId: current.activeProfileId,
   })
 }
@@ -872,4 +897,5 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentApiConfigMode: 'off',
   agentTextProfileId: null,
   agentImageProfileId: null,
+  skills: [],
 })

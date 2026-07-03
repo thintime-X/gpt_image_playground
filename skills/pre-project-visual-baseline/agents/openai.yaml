@@ -1,0 +1,4 @@
+interface:
+  display_name: "项目视觉基准询问"
+  short_description: "开始视觉项目前确认色调基准与尺寸比例"
+  default_prompt: "Use $pre-project-visual-baseline to clarify visual tone references and aspect ratio before starting the project."

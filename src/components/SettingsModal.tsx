@@ -34,9 +34,10 @@ import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdo
 import Select from './Select'
 import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
-import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon } from './icons'
+import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon, CodeIcon } from './icons'
 import GeneralSettingsTab from './settings/GeneralSettingsTab'
 import AgentSettingsTab from './settings/AgentSettingsTab'
+import SkillSettingsTab from './settings/SkillSettingsTab'
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
@@ -775,6 +776,14 @@ export default function SettingsModal() {
     setShowProfileMenu(false)
   }
 
+  const handleSettingsChanged = (nextSettings: AppSettings) => {
+    const nextDraft = normalizeSettings(nextSettings)
+    setDraft(nextDraft)
+    setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
+    setAgentMaxToolRoundsInput(String(nextDraft.agentMaxToolRounds))
+    setShowProfileMenu(false)
+  }
+
   const createNewProfile = () => {
     if (defaultConfigOnly) return
     setReusedTaskApiProfile(null)
@@ -1217,6 +1226,13 @@ export default function SettingsModal() {
                 Agent 配置
               </button>
               <button
+                onClick={() => setActiveTab('skills')}
+                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'skills' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+              >
+                <CodeIcon className="h-4 w-4" />
+                Skill
+              </button>
+              <button
                 onClick={() => setActiveTab('data')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'data' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
               >
@@ -1262,6 +1278,13 @@ export default function SettingsModal() {
                 updateAgentApiConfigMode={updateAgentApiConfigMode}
                 commitSettings={commitSettings}
                 commitAgentMaxToolRounds={commitAgentMaxToolRounds}
+              />
+            )}
+
+            {activeTab === 'skills' && (
+              <SkillSettingsTab
+                draft={draft}
+                onSettingsChanged={handleSettingsChanged}
               />
             )}
             

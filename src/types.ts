@@ -67,6 +67,33 @@ export interface CustomProviderDefinition {
   poll?: CustomProviderPollMapping
 }
 
+export type SkillPresetMode = AppMode | 'all'
+export type SkillPromptMode = 'replace' | 'append' | 'prepend'
+
+export interface SkillPreset {
+  id: string
+  name: string
+  description?: string
+  mode: SkillPresetMode
+  triggers?: string[]
+  autoApply?: boolean
+  prompt?: string
+  promptMode: SkillPromptMode
+  params?: Partial<TaskParams>
+  profileId?: string
+}
+
+export interface SkillDefinition {
+  schema: string
+  id: string
+  name: string
+  version: string
+  description?: string
+  customProviders?: CustomProviderDefinition[]
+  profiles?: ApiProfile[]
+  presets: SkillPreset[]
+}
+
 export interface ApiProfile {
   id: string
   name: string
@@ -115,6 +142,7 @@ export interface AppSettings {
   agentImageProfileId?: string | null
   profiles: ApiProfile[]
   activeProfileId: string
+  skills: SkillDefinition[]
 }
 
 // ===== 任务参数 =====
@@ -265,6 +293,7 @@ export interface AgentRound {
   userMessageId: string
   assistantMessageId?: string
   prompt: string
+  effectivePrompt?: string
   inputImageIds: string[]
   maskTargetImageId?: string | null
   maskImageId?: string | null

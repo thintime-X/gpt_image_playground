@@ -40,6 +40,7 @@ function pickUrlSettingsPayload(value: unknown): unknown | null {
   return {
     customProviders: record.customProviders,
     profiles: record.profiles,
+    skills: record.skills,
   }
 }
 

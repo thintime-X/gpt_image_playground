@@ -8,6 +8,7 @@ import type {
   ApiProfile,
   AppSettings,
   AppMode,
+  SkillDefinition,
   TaskParams,
   InputImage,
   MaskDraft,
@@ -55,6 +56,7 @@ import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBa
 import { blobToDataUrl, fileToDataUrl } from './lib/dataUrl'
 import { formatExportFileTime } from './lib/exportFileName'
 import { buildExportZip, readExportZip, readExportZipFileAsDataUrl } from './lib/exportZip'
+import { applySkillPreset as applySkillPresetToInput, findAutoSkillPreset, mergeImportedSkills, stripAutoSkillPresetPrompts } from './lib/skills'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -121,7 +123,7 @@ function isErrorToastTitle(title: string): boolean {
   return /(?:失败|错误|异常|报错|无法|不能|超时|中断|断开|请先|请输入|已达上限|不存在|已丢失)$/.test(title)
 }
 
-export type SettingsTab = 'general' | 'agent' | 'api' | 'data' | 'about'
+export type SettingsTab = 'general' | 'agent' | 'api' | 'skills' | 'data' | 'about'
 
 const TIMEOUT_STREAMING_HINT = '也可尝试打开「流式传输」，并提高「请求中间步骤图像数」来维持连接。'
 const TIMEOUT_PARTIAL_IMAGES_ZERO_HINT = '官方流式接口不发送心跳，当前「请求中间步骤图像数」为 0，连接可能因无数据传输而断开。建议提高到 2 或 3。'
@@ -417,6 +419,7 @@ function normalizeAgentRound(value: unknown, fallbackIndex: number): AgentRound 
     userMessageId: round.userMessageId,
     ...(typeof round.assistantMessageId === 'string' ? { assistantMessageId: round.assistantMessageId } : {}),
     prompt: typeof round.prompt === 'string' ? round.prompt : '',
+    ...(typeof round.effectivePrompt === 'string' && round.effectivePrompt.trim() ? { effectivePrompt: round.effectivePrompt } : {}),
     inputImageIds: normalizeStringArray(round.inputImageIds),
     maskTargetImageId: typeof round.maskTargetImageId === 'string' ? round.maskTargetImageId : null,
     maskImageId: typeof round.maskImageId === 'string' ? round.maskImageId : null,
@@ -790,6 +793,9 @@ interface AppState {
   // 设置
   settings: AppSettings
   setSettings: (s: Partial<AppSettings>) => void
+  importSkill: (skill: SkillDefinition) => void
+  removeSkill: (id: string) => void
+  applySkillPreset: (skillId: string, presetId: string) => void
   dismissedCodexCliPrompts: string[]
   dismissCodexCliPrompt: (key: string) => void
 
@@ -1264,6 +1270,55 @@ export const useStore = create<AppState>()(
         return {
           settings,
           ...(shouldClearReusedProfile
+            ? { reusedTaskApiProfileId: null, reusedTaskApiProfileName: null, reusedTaskApiProfileMissing: false }
+            : {}),
+        }
+      }),
+      importSkill: (skill) => set((st) => {
+        const skills = mergeImportedSkills(st.settings.skills, [skill])
+        if (!skill.profiles?.length) {
+          return {
+            settings: normalizeSettings({
+              ...st.settings,
+              skills,
+            }),
+          }
+        }
+
+        const incomingSettings = normalizeSettings({
+          customProviders: skill.customProviders ?? [],
+          profiles: skill.profiles,
+        })
+        const merged = mergeImportedSettings(st.settings, incomingSettings)
+        return {
+          settings: normalizeSettings({
+            ...merged,
+            skills,
+          }),
+        }
+      }),
+      removeSkill: (id) => set((st) => ({
+        settings: normalizeSettings({
+          ...st.settings,
+          skills: st.settings.skills.filter((skill) => skill.id !== id),
+        }),
+      })),
+      applySkillPreset: (skillId, presetId) => set((st) => {
+        const skill = st.settings.skills.find((item) => item.id === skillId)
+        const preset = skill?.presets.find((item) => item.id === presetId)
+        if (!preset) return st
+
+        const result = applySkillPresetToInput(preset, st.prompt, st.params)
+        const nextState = syncActiveInputDraft(st, { prompt: result.prompt })
+        const nextSettings = preset.profileId && st.settings.profiles.some((profile) => profile.id === preset.profileId)
+          ? normalizeSettings({ ...st.settings, activeProfileId: preset.profileId })
+          : st.settings
+
+        return {
+          ...nextState,
+          params: result.params,
+          settings: nextSettings,
+          ...(nextSettings !== st.settings
             ? { reusedTaskApiProfileId: null, reusedTaskApiProfileName: null, reusedTaskApiProfileMissing: false }
             : {}),
         }
@@ -1879,6 +1934,35 @@ function getReusedTaskApiProfile(settings: AppSettings, profileId: string | null
   return normalizeSettings(settings).profiles.find((profile) => profile.id === profileId) ?? null
 }
 
+function getAutoSkillPresetForSubmit(
+  appMode: AppMode,
+  settings: AppSettings,
+  prompt: string,
+  params: TaskParams,
+  showToast: (message: string, type: ToastType) => void,
+) {
+  const match = findAutoSkillPreset(settings.skills, prompt, appMode)
+  if (!match) return { settings, prompt, params, settingsChanged: false }
+
+  const result = applySkillPresetToInput(match.preset, prompt, params)
+  const nextSettings = match.preset.profileId && settings.profiles.some((profile) => profile.id === match.preset.profileId)
+    ? normalizeSettings({ ...settings, activeProfileId: match.preset.profileId })
+    : settings
+  const paramsChanged = Object.keys(getChangedParams(params, result.params)).length > 0
+  const promptChanged = result.prompt !== prompt
+  const settingsChanged = nextSettings !== settings
+  if (paramsChanged || promptChanged || settingsChanged) {
+    showToast(`已自动应用 Skill「${match.skill.name} / ${match.preset.name}」`, 'info')
+  }
+
+  return {
+    settings: nextSettings,
+    prompt: result.prompt,
+    params: result.params,
+    settingsChanged,
+  }
+}
+
 function getTaskApiProfileName(task: TaskRecord) {
   return task.apiProfileName || task.apiModel || '未知配置'
 }
@@ -2331,8 +2415,15 @@ export async function initStore() {
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
-    useStore.getState()
+  const state = useStore.getState()
+  const autoSkill = getAutoSkillPresetForSubmit('gallery', state.settings, state.prompt, state.params, state.showToast)
+  const { inputImages, maskDraft, showToast, setConfirmDialog } = state
+  const settings = autoSkill.settings
+  const prompt = autoSkill.prompt
+  const params = autoSkill.params
+  const reusedTaskApiProfileId = autoSkill.settingsChanged ? null : state.reusedTaskApiProfileId
+  const reusedTaskApiProfileName = autoSkill.settingsChanged ? null : state.reusedTaskApiProfileName
+  const reusedTaskApiProfileMissing = autoSkill.settingsChanged ? false : state.reusedTaskApiProfileMissing
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
@@ -2940,10 +3031,10 @@ async function readAgentImageDataUrls(ids: string[]) {
   return dataUrls
 }
 
-async function createAgentUserInputItem(conversation: AgentConversation, round: AgentRound, message: AgentMessage, tasks: TaskRecord[]) {
+async function createAgentUserInputItem(conversation: AgentConversation, round: AgentRound, message: AgentMessage, tasks: TaskRecord[], inputText?: string) {
   const imageDataUrls = await readAgentImageDataUrls(round.inputImageIds)
   const rounds = getAgentRoundPath(conversation, round.id)
-  const text = replaceAgentPromptImageReferencesForApi(message.content, round, rounds, tasks)
+  const text = replaceAgentPromptImageReferencesForApi(inputText ?? message.content, round, rounds, tasks)
   const referenceText = round.inputImageIds.length > 0
     ? `\n\n<available_refs>${round.inputImageIds.map((_, index) => `\n  <ref id="${getAgentCurrentReferenceId(round, index)}" />`).join('')}\n</available_refs>`
     : ''
@@ -3227,7 +3318,7 @@ function getAgentRoundResponseOutput(round: AgentRound, tasks: TaskRecord[]): Re
   return null
 }
 
-async function buildAgentApiInput(conversation: AgentConversation, currentRound: AgentRound, tasks: TaskRecord[]): Promise<unknown[]> {
+async function buildAgentApiInput(conversation: AgentConversation, currentRound: AgentRound, tasks: TaskRecord[], settings: AppSettings): Promise<unknown[]> {
   const input: unknown[] = []
   const rounds = getAgentRoundPath(conversation, currentRound.id)
 
@@ -3235,7 +3326,10 @@ async function buildAgentApiInput(conversation: AgentConversation, currentRound:
     const userMessage = conversation.messages.find((message) => message.id === round.userMessageId)
     if (!userMessage) continue
 
-    input.push(await createAgentUserInputItem(conversation, round, userMessage, tasks))
+    const inputText = round.id === currentRound.id
+      ? round.effectivePrompt ?? userMessage.content
+      : stripAutoSkillPresetPrompts(settings.skills, userMessage.content, 'agent')
+    input.push(await createAgentUserInputItem(conversation, round, userMessage, tasks, inputText))
     if (round.id === currentRound.id) continue
 
     const output = getAgentRoundResponseOutput(round, tasks)
@@ -3515,7 +3609,10 @@ async function continueRecoveredAgentRound(taskId: string) {
 
 export async function submitAgentMessage() {
   const state = useStore.getState()
-  const { settings, prompt, inputImages, maskDraft, params, showToast } = state
+  const autoSkill = getAutoSkillPresetForSubmit('agent', state.settings, state.prompt, state.params, state.showToast)
+  const { prompt, inputImages, maskDraft, showToast } = state
+  const settings = autoSkill.settings
+  const params = autoSkill.params
   const normalizedSettings = normalizeSettings(settings)
 
   const agentValidationError = getAgentProfileValidationError(normalizedSettings)
@@ -3602,6 +3699,7 @@ export async function submitAgentMessage() {
     ...(editingRoundHasErrorAssistantMessage && editingRoundAssistantMessage ? { assistantMessageId: editingRoundAssistantMessage.id } : {}),
     userMessageId,
     prompt: trimmedPrompt,
+    ...(autoSkill.prompt.trim() !== trimmedPrompt ? { effectivePrompt: autoSkill.prompt.trim() } : {}),
     inputImageIds,
     maskTargetImageId,
     maskImageId,
@@ -3739,6 +3837,7 @@ export async function regenerateAgentAssistantMessage(conversationId: string, ro
     parentRoundId: sourceRound.parentRoundId ?? null,
     userMessageId: newUserMessageId,
     prompt: sourceRound.prompt || sourceUserMessage.content.trim(),
+    ...(sourceRound.effectivePrompt ? { effectivePrompt: sourceRound.effectivePrompt } : {}),
     inputImageIds,
     maskTargetImageId: sourceRound.maskTargetImageId ?? sourceUserMessage.maskTargetImageId ?? null,
     maskImageId: sourceRound.maskImageId ?? sourceUserMessage.maskImageId ?? null,
@@ -3793,7 +3892,7 @@ async function executeAgentRound(
     const maskDataUrl = round.maskImageId ? await ensureImageCached(round.maskImageId) : undefined
     if (round.maskImageId && !maskDataUrl) throw new Error('遮罩图片已不存在')
 
-    const apiInput = await buildAgentApiInput(conversation, round, latestState.tasks)
+    const apiInput = await buildAgentApiInput(conversation, round, latestState.tasks, requestSettings)
     if (controller.signal.aborted) throw createAgentAbortError()
     const existingAssistantMessage = round.assistantMessageId
       ? conversation.messages.find((message) => message.id === round.assistantMessageId) ?? null
@@ -5596,4 +5695,3 @@ export async function addImageFromUrl(src: string): Promise<void> {
   cacheImage(id, dataUrl)
   useStore.getState().addInputImage({ id, dataUrl })
 }
-

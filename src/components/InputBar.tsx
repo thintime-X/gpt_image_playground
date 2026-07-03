@@ -9,10 +9,11 @@ import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getSafeBoundingClientRect } from '../lib/domRect'
 import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
+import { getSkillPresetsForMode } from '../lib/skills'
 import { useHintTooltip } from '../hooks/useHintTooltip'
 import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getTaskOutputImageZipEntries } from '../lib/downloadImages'
 import SizePickerModal from './SizePickerModal'
-import { CloseIcon } from './icons'
+import { CloseIcon, CodeIcon } from './icons'
 import ButtonTooltip from './input/buttonTooltip'
 import DragUploadOverlay from './input/dragUploadOverlay'
 import InputBatchBars from './input/inputBatchBars'
@@ -397,6 +398,7 @@ export default function InputBar() {
   const setParams = useStore((s) => s.setParams)
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
+  const applySkillPreset = useStore((s) => s.applySkillPreset)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
@@ -624,6 +626,8 @@ export default function InputBar() {
   const [isSingleLine, setIsSingleLine] = useState(true)
   const [submitHover, setSubmitHover] = useState(false)
   const [attachHover, setAttachHover] = useState(false)
+  const [skillHover, setSkillHover] = useState(false)
+  const [showSkillMenu, setShowSkillMenu] = useState(false)
   const [imageHintId, setImageHintId] = useState<string | null>(null)
   const [mobileCollapsed, setMobileCollapsed] = useState(false)
   const [showSizePicker, setShowSizePicker] = useState(false)
@@ -828,10 +832,22 @@ export default function InputBar() {
       ]
     : []
   const showAtImageMenu = !atImageMenuDismissed && atImageOptions.length > 0
+  const skillPresetItems = useMemo(() => getSkillPresetsForMode(settings.skills, appMode), [settings.skills, appMode])
+  const hasSkillPresets = skillPresetItems.length > 0
 
 
 
 
+
+  const handleApplySkillPreset = useCallback((skillId: string, presetId: string, presetName: string) => {
+    isUserInputRef.current = false
+    applySkillPreset(skillId, presetId)
+    setShowSkillMenu(false)
+    showToast(`已应用预设「${presetName}」`, 'success')
+    window.setTimeout(() => {
+      textareaRef.current?.focus()
+    }, 0)
+  }, [applySkillPreset, showToast])
 
   const selectAtImageOption = useCallback((option: AtImageOption) => {
     const el = textareaRef.current
@@ -1883,6 +1899,39 @@ export default function InputBar() {
     )
   }
 
+  const renderSkillMenu = (align: 'left' | 'right' = 'right') => {
+    if (!showSkillMenu || !hasSkillPresets) return null
+
+    return (
+      <>
+        <div className="fixed inset-0 z-40" onClick={() => setShowSkillMenu(false)} />
+        <div className={`absolute bottom-full z-50 mb-2 w-72 overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 ${align === 'left' ? 'left-0' : 'right-0'}`}>
+          <div className="px-2 pb-1 pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">选择 Skill 预设</div>
+          <div className="max-h-64 overflow-y-auto custom-scrollbar">
+            {skillPresetItems.map(({ skill, preset }) => (
+              <button
+                key={`${skill.id}:${preset.id}`}
+                type="button"
+                onClick={() => handleApplySkillPreset(skill.id, preset.id, preset.name)}
+                className="flex w-full flex-col rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-gray-50 dark:hover:bg-white/[0.06]"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 truncate text-xs font-semibold text-gray-700 dark:text-gray-200">{preset.name}</span>
+                  <span className="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">{skill.name}</span>
+                </span>
+                {preset.description && (
+                  <span className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                    {preset.description}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      </>
+    )
+  }
+
   const renderParams = (cols: string) => (
     <InputParamsPanel
       cols={cols}
@@ -2101,6 +2150,28 @@ export default function InputBar() {
               {renderParams('grid-cols-6')}
 
               <div className="flex gap-2 flex-shrink-0 mb-0.5">
+                {hasSkillPresets && (
+                  <div
+                    className="relative"
+                    onMouseEnter={() => setSkillHover(true)}
+                    onMouseLeave={() => setSkillHover(false)}
+                  >
+                    <ButtonTooltip visible={skillHover && !showSkillMenu} text="Skill 预设" />
+                    <button
+                      type="button"
+                      onClick={() => setShowSkillMenu((v) => !v)}
+                      className={`p-2.5 rounded-xl transition-all shadow-sm ${
+                        showSkillMenu
+                          ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                          : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow'
+                      }`}
+                      aria-label="Skill 预设"
+                    >
+                      <CodeIcon className="h-5 w-5" />
+                    </button>
+                    {renderSkillMenu('right')}
+                  </div>
+                )}
                 <div
                   className="relative"
                   onMouseEnter={() => setAttachHover(true)}
@@ -2163,6 +2234,23 @@ export default function InputBar() {
               </div>
 
               <div className="flex items-center gap-2">
+                {hasSkillPresets && (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowSkillMenu((v) => !v)}
+                      className={`flex-shrink-0 rounded-xl p-2.5 shadow-sm transition-all ${
+                        showSkillMenu
+                          ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                          : 'bg-gray-200 text-gray-500 hover:bg-gray-300 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]'
+                      }`}
+                      aria-label="Skill 预设"
+                    >
+                      <CodeIcon className="h-5 w-5" />
+                    </button>
+                    {renderSkillMenu('left')}
+                  </div>
+                )}
                 <div
                   className="relative"
                   onMouseEnter={() => setAttachHover(true)}
